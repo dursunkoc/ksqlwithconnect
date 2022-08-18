@@ -1,0 +1,95 @@
+version: '2'
+
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:5.4.9
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 32181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  kafka:
+    image: confluentinc/cp-enterprise-kafka:5.4.9
+    ports:
+      - "29092:29092"
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:32181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 100
+
+  connect:
+    build:
+      context: debezium-jdbc
+    ports:
+     - 8083:8083
+    links:
+     - kafka
+     - mysql
+     - postgres
+    environment:
+     - BOOTSTRAP_SERVERS=kafka:9092
+     - GROUP_ID=1
+     - CONFIG_STORAGE_TOPIC=my_connect_configs
+     - OFFSET_STORAGE_TOPIC=my_connect_offsets
+     - STATUS_STORAGE_TOPIC=my_connect_statuses
+
+  schema-registry:
+    image: confluentinc/cp-schema-registry:5.4.9
+    depends_on:
+      - zookeeper
+      - kafka
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka:9092
+
+  primary-ksqldb-server:
+    image: confluentinc/ksqldb-server:0.27.2
+    hostname: primary-ksqldb-server
+    container_name: primary-ksqldb-server
+    depends_on:
+      - kafka
+      - schema-registry
+    ports:
+      - "8088:8088"
+    environment:
+      KSQL_LISTENERS: http://0.0.0.0:8088
+      KSQL_BOOTSTRAP_SERVERS: kafka:9092
+      KSQL_KSQL_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      KSQL_KSQL_CONNECT_URL: http://connect:8083
+      KSQL_KSQL_LOGGING_PROCESSING_STREAM_AUTO_CREATE: "true"
+      KSQL_KSQL_LOGGING_PROCESSING_TOPIC_AUTO_CREATE: "true"
+
+  mysql:
+    image: debezium/example-mysql:1.9.5.Final
+    ports:
+     - 3306:3306
+    environment:
+     - MYSQL_ROOT_PASSWORD=debezium
+     - MYSQL_USER=mysqluser
+     - MYSQL_PASSWORD=mysqlpw 
+
+  postgres:
+    image: debezium/postgres:14-alpine
+    ports:
+     - "5432:5432"
+    environment:
+     - POSTGRES_USER=postgresuser
+     - POSTGRES_PASSWORD=postgrespw
+     - POSTGRES_DB=inventory
+
+  # Access the cli by running:
+  # > docker-compose exec ksqldb-cli  ksql http://primary-ksqldb-server:8088
+  ksqldb-cli:
+    image: confluentinc/ksqldb-cli:0.27.2
+    container_name: ksqldb-cli
+    depends_on:
+      - primary-ksqldb-server
+    entrypoint: /bin/sh
+    tty: true
